@@ -6,20 +6,15 @@ from telebot.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeybo
 
 TOKEN = "8632745463:AAFnXVv-TdZjfvctgiOGC-MUS4A7FRJ7BZw"
 ADMIN_ID = 8626918981
-GROUP_ID = --1003549378995  # নিজের group id বসা
+GROUP_ID = --1003549378995
 
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
-
 lock = threading.Lock()
 
-# -------------------------
-# GLOBAL STATE
-# -------------------------
 bot_running = False
 event_count = 0
 user_state = {}
 
-# folders -> services -> countries
 data_store = {
     "Main": {
         "Telegram": {
@@ -58,9 +53,6 @@ data_store = {
 }
 
 
-# -------------------------
-# HELPERS
-# -------------------------
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
@@ -84,17 +76,6 @@ def make_fake_token(service, country, idx):
 
 def get_country_info(folder, service, country):
     return data_store.get(folder, {}).get(service, {}).get(country)
-
-
-def all_services():
-    result = []
-    seen = set()
-    for folder, services in data_store.items():
-        for service in services.keys():
-            if service not in seen:
-                result.append(service)
-                seen.add(service)
-    return result
 
 
 def folders_keyboard():
@@ -285,9 +266,6 @@ def admin_intervals_picker():
     return kb
 
 
-# -------------------------
-# SIMULATOR THREAD
-# -------------------------
 def simulator():
     global event_count, bot_running
 
@@ -301,10 +279,14 @@ def simulator():
                         for country, info in countries.items():
                             snapshot.append((folder, service, country, info.copy()))
 
+            print("SIMULATOR LOOP:", current_running, "TOTAL:", len(snapshot))
+
             if current_running:
                 now = time.time()
 
                 for folder, service, country, info in snapshot:
+                    print("CHECK:", folder, service, country, info["active"], info["interval"], info["last_sent"])
+
                     if not info["active"]:
                         continue
 
@@ -319,9 +301,11 @@ def simulator():
                         )
 
                         try:
+                            print("TRYING GROUP SEND:", GROUP_ID)
                             bot.send_message(GROUP_ID, text)
-                        except Exception:
-                            pass
+                            print("GROUP MESSAGE SENT OK")
+                        except Exception as e:
+                            print("GROUP SEND ERROR:", e)
 
                         with lock:
                             try:
@@ -334,16 +318,14 @@ def simulator():
 
             time.sleep(1)
 
-        except Exception:
+        except Exception as e:
+            print("SIMULATOR ERROR:", e)
             time.sleep(2)
 
 
 threading.Thread(target=simulator, daemon=True).start()
 
 
-# -------------------------
-# START
-# -------------------------
 @bot.message_handler(commands=["start"])
 def start(message):
     if is_admin(message.from_user.id):
@@ -352,9 +334,17 @@ def start(message):
         bot.send_message(message.chat.id, "📂 <b>Select a folder:</b>", reply_markup=folders_keyboard())
 
 
-# -------------------------
-# ADMIN TEXT MENU
-# -------------------------
+@bot.message_handler(commands=["testgroup"])
+def testgroup(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        bot.send_message(GROUP_ID, "✅ Test message to group")
+        bot.reply_to(message, "Group test sent")
+    except Exception as e:
+        bot.reply_to(message, f"Group error: {e}")
+
+
 @bot.message_handler(func=lambda m: is_admin(m.from_user.id) and m.text in [
     "📊 Stats", "🤖 Bot Control", "📂 Folders", "📱 Services", "🌍 Countries", "⏱ Intervals", "👁 User Panel"
 ])
@@ -406,9 +396,6 @@ def admin_menu_handler(message):
         bot.send_message(message.chat.id, "📂 <b>Select a folder:</b>", reply_markup=folders_keyboard())
 
 
-# -------------------------
-# CALLBACKS
-# -------------------------
 @bot.callback_query_handler(func=lambda call: True)
 def callbacks(call):
     global bot_running
@@ -416,7 +403,6 @@ def callbacks(call):
     user_id = call.from_user.id
     data = call.data
 
-    # ---------- USER PANEL ----------
     if data == "user_back_folders":
         bot.edit_message_text(
             "📂 <b>Select a folder:</b>",
@@ -533,7 +519,6 @@ def callbacks(call):
         )
         bot.answer_callback_query(call.id, "Changed")
 
-    # ---------- ADMIN BOT CONTROL ----------
     elif is_admin(user_id) and data == "admin_bot_on":
         with lock:
             bot_running = True
@@ -546,7 +531,6 @@ def callbacks(call):
         bot.answer_callback_query(call.id, "Bot OFF")
         bot.edit_message_text("🤖 Bot Status: OFF ❌", call.message.chat.id, call.message.message_id)
 
-    # ---------- ADMIN FOLDERS ----------
     elif is_admin(user_id) and data == "admin_back_folders":
         bot.edit_message_text(
             "📂 Manage Folders",
@@ -587,7 +571,6 @@ def callbacks(call):
             reply_markup=admin_folder_keyboard()
         )
 
-    # ---------- ADMIN SERVICES ----------
     elif is_admin(user_id) and data == "admin_services_folder_back":
         bot.edit_message_text(
             "📱 Select Folder To Manage Services",
@@ -649,7 +632,6 @@ def callbacks(call):
             reply_markup=admin_services_keyboard(folder)
         )
 
-    # ---------- ADMIN COUNTRIES ----------
     elif is_admin(user_id) and data == "admin_back_country_picker":
         bot.edit_message_text(
             "🌍 Select Service To Manage Countries",
@@ -673,8 +655,7 @@ def callbacks(call):
         _, folder, service = data.split("|", 2)
         msg = bot.send_message(
             call.message.chat.id,
-            "Country format:\n\nBangladesh 🇧🇩 7 5\n\n"
-            "Format = Name Flag Count Interval"
+            "Country format:\n\nBangladesh 🇧🇩 7 5\n\nFormat = Name Flag Count Interval"
         )
         bot.register_next_step_handler(msg, process_add_country, folder, service)
         bot.answer_callback_query(call.id)
@@ -723,7 +704,6 @@ def callbacks(call):
             reply_markup=admin_countries_keyboard(folder, service)
         )
 
-    # ---------- ADMIN INTERVALS ----------
     elif is_admin(user_id) and data.startswith("admin_set_interval|"):
         _, folder, service, country = data.split("|", 3)
         current = 0
@@ -740,9 +720,6 @@ def callbacks(call):
         bot.answer_callback_query(call.id)
 
 
-# -------------------------
-# NEXT STEP HANDLERS
-# -------------------------
 def process_add_folder(message):
     if not is_admin(message.from_user.id):
         return
