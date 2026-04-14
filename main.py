@@ -24,8 +24,8 @@ BOT_LINK = os.getenv("BOT_LINK", "https://t.me/numberfast12_bot")
 
 DATA_FILE = "otp_bot_data.json"
 
-# panel messages auto delete delay
-PANEL_AUTO_DELETE_DELAY = 5
+# panel messages + user button-text auto delete delay
+PANEL_AUTO_DELETE_DELAY = 60  # 1 minute
 
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
@@ -67,7 +67,7 @@ countries = [c.copy() for c in default_countries]
 
 FORCE_STOP = False
 AUTO_DELETE_ENABLED = True
-AUTO_DELETE_DELAY = 300  # group message auto delete
+AUTO_DELETE_DELAY = 300  # group OTP auto delete delay
 
 CUSTOM_SMS_TEXT = "তোর টেলিগ্রাম কোড এসেছে গুরুপ চেক কর"
 GROUP_SEND_DELAY = 120  # default delay for all/new countries
@@ -160,7 +160,17 @@ def seconds_to_text(sec):
         return f"{mins}m"
     return f"{mins}m {rem}s"
 
-def auto_delete(chat_id, message_id, delay=5):
+def auto_delete(chat_id, message_id, delay=60):
+    def delete_later():
+        time.sleep(delay)
+        try:
+            bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+
+    threading.Thread(target=delete_later, daemon=True).start()
+
+def delete_user_message_later(chat_id, message_id, delay=60):
     def delete_later():
         time.sleep(delay)
         try:
@@ -403,6 +413,9 @@ def start(msg):
     if not is_admin(msg.from_user.id):
         return
 
+    # delete user's /start after 1 minute
+    delete_user_message_later(msg.chat.id, msg.message_id, PANEL_AUTO_DELETE_DELAY)
+
     with data_lock:
         current_running = running
         auto_del = "ON" if AUTO_DELETE_ENABLED else "OFF"
@@ -436,6 +449,9 @@ def panel(message):
 
     if not is_admin(message.from_user.id):
         return
+
+    # delete user's button-text / typed message after 1 minute
+    delete_user_message_later(message.chat.id, message.message_id, PANEL_AUTO_DELETE_DELAY)
 
     text = (message.text or "").strip()
 
@@ -535,7 +551,7 @@ def panel(message):
         msg = send_panel_message(
             message.chat.id,
             "Send auto delete time in seconds\n\nExample: <code>1</code> / <code>5</code> / <code>60</code>",
-            delay=10
+            delay=PANEL_AUTO_DELETE_DELAY
         )
         bot.register_next_step_handler(msg, set_custom_time)
 
@@ -543,7 +559,7 @@ def panel(message):
         msg = send_panel_message(
             message.chat.id,
             "Send new channel link\n\nExample:\n<code>https://t.me/your_channel</code>",
-            delay=10
+            delay=PANEL_AUTO_DELETE_DELAY
         )
         bot.register_next_step_handler(msg, update_channel_link_process)
 
@@ -551,7 +567,7 @@ def panel(message):
         msg = send_panel_message(
             message.chat.id,
             "Send new bot link\n\nExample:\n<code>https://t.me/your_bot</code>",
-            delay=10
+            delay=PANEL_AUTO_DELETE_DELAY
         )
         bot.register_next_step_handler(msg, update_bot_link_process)
 
@@ -559,7 +575,7 @@ def panel(message):
         msg = send_panel_message(
             message.chat.id,
             f"Current SMS Text:\n\n<code>{CUSTOM_SMS_TEXT}</code>\n\nSend new SMS text now:",
-            delay=15
+            delay=PANEL_AUTO_DELETE_DELAY
         )
         bot.register_next_step_handler(msg, update_sms_text_process)
 
@@ -567,7 +583,7 @@ def panel(message):
         msg = send_panel_message(
             message.chat.id,
             f"Current Default Group Send Time: <b>{GROUP_SEND_DELAY} sec</b>\n\nSend new time in seconds\nExample: <code>120</code>\n\nএটা সব দেশের delay একসাথে set করবে.",
-            delay=15
+            delay=PANEL_AUTO_DELETE_DELAY
         )
         bot.register_next_step_handler(msg, update_group_send_time_process)
 
@@ -611,7 +627,7 @@ def callbacks(call):
             msg = send_panel_message(
                 call.message.chat.id,
                 "Send format like:\n\n<code>🇯🇵 Japan #JP +819 Telegram</code>",
-                delay=10
+                delay=PANEL_AUTO_DELETE_DELAY
             )
             bot.register_next_step_handler(msg, add_country_process)
             bot.answer_callback_query(call.id)
@@ -806,7 +822,7 @@ def callbacks(call):
             msg = send_panel_message(
                 call.message.chat.id,
                 f"Send custom delay in seconds for <b>{cname}</b>\n\nExample: <code>1</code> / <code>5</code> / <code>60</code>",
-                delay=10
+                delay=PANEL_AUTO_DELETE_DELAY
             )
             bot.register_next_step_handler(msg, set_custom_country_delay)
             bot.answer_callback_query(call.id)
@@ -832,6 +848,8 @@ def callbacks(call):
 def add_country_process(message):
     if not is_admin(message.from_user.id):
         return
+
+    delete_user_message_later(message.chat.id, message.message_id, PANEL_AUTO_DELETE_DELAY)
 
     text = (message.text or "").strip()
 
@@ -883,6 +901,8 @@ def set_custom_time(message):
     if not is_admin(message.from_user.id):
         return
 
+    delete_user_message_later(message.chat.id, message.message_id, PANEL_AUTO_DELETE_DELAY)
+
     try:
         sec = int((message.text or "").strip())
 
@@ -908,6 +928,8 @@ def update_channel_link_process(message):
     if not is_admin(message.from_user.id):
         return
 
+    delete_user_message_later(message.chat.id, message.message_id, PANEL_AUTO_DELETE_DELAY)
+
     text = (message.text or "").strip()
 
     if not text.startswith("https://t.me/"):
@@ -927,6 +949,8 @@ def update_bot_link_process(message):
 
     if not is_admin(message.from_user.id):
         return
+
+    delete_user_message_later(message.chat.id, message.message_id, PANEL_AUTO_DELETE_DELAY)
 
     text = (message.text or "").strip()
 
@@ -948,6 +972,8 @@ def update_sms_text_process(message):
     if not is_admin(message.from_user.id):
         return
 
+    delete_user_message_later(message.chat.id, message.message_id, PANEL_AUTO_DELETE_DELAY)
+
     text = (message.text or "").strip()
 
     if not text:
@@ -967,6 +993,8 @@ def update_group_send_time_process(message):
 
     if not is_admin(message.from_user.id):
         return
+
+    delete_user_message_later(message.chat.id, message.message_id, PANEL_AUTO_DELETE_DELAY)
 
     try:
         sec = int((message.text or "").strip())
@@ -994,6 +1022,8 @@ def update_group_send_time_process(message):
 def set_custom_country_delay(message):
     if not is_admin(message.from_user.id):
         return
+
+    delete_user_message_later(message.chat.id, message.message_id, PANEL_AUTO_DELETE_DELAY)
 
     chat_id = message.chat.id
     if chat_id not in pending_country_delay_index:
