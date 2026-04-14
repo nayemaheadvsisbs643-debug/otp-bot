@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
-import telebot
-import random
-import time
-import threading
-import json
 import os
+import io
+import json
+import time
+import random
+import threading
 import logging
+from datetime import datetime
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+import telebot
 from telebot.types import (
     ReplyKeyboardMarkup,
     InlineKeyboardMarkup,
@@ -23,15 +26,10 @@ CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/YOUR_CHANNEL")
 BOT_LINK = os.getenv("BOT_LINK", "https://t.me/numberfast12_bot")
 
 DATA_FILE = "otp_bot_data.json"
-
-# panel messages + user text auto delete
-PANEL_AUTO_DELETE_DELAY = 60  # 1 minute
+PANEL_AUTO_DELETE_DELAY = 60  # panel/user messages delete after 1 min
 
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
 
-# =========================
-# LOGGING
-# =========================
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
@@ -67,12 +65,23 @@ countries = [c.copy() for c in default_countries]
 
 FORCE_STOP = False
 AUTO_DELETE_ENABLED = True
-AUTO_DELETE_DELAY = 300  # group OTP auto delete
-
+AUTO_DELETE_DELAY = 300  # group OTP image auto delete
 CUSTOM_SMS_TEXT = "তোর টেলিগ্রাম কোড এসেছে গুরুপ চেক কর"
 GROUP_SEND_DELAY = 120  # default delay for all/new countries
 
 pending_country_delay_index = {}
+
+# =========================
+# FONTS
+# =========================
+FONT_REG = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+def get_font(path: str, size: int):
+    try:
+        return ImageFont.truetype(path, size)
+    except Exception:
+        return ImageFont.load_default()
 
 # =========================
 # SAVE / LOAD
@@ -97,11 +106,8 @@ def save_data():
             "group_send_delay": GROUP_SEND_DELAY
         }
 
-    try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logging.error(f"Save failed: {e}")
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 def load_data():
     global running, otp_count, services, countries
@@ -112,29 +118,25 @@ def load_data():
         save_data()
         return
 
-    try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
 
-        with data_lock:
-            running = data.get("running", False)
-            otp_count = data.get("otp_count", 0)
-            services = data.get("services", default_services[:])
-            countries = data.get("countries", [c.copy() for c in default_countries])
-            FORCE_STOP = data.get("force_stop", False)
-            AUTO_DELETE_ENABLED = data.get("auto_delete_enabled", True)
-            AUTO_DELETE_DELAY = data.get("auto_delete_delay", 300)
-            CHANNEL_LINK = data.get("channel_link", CHANNEL_LINK)
-            BOT_LINK = data.get("bot_link", BOT_LINK)
-            CUSTOM_SMS_TEXT = data.get("custom_sms_text", CUSTOM_SMS_TEXT)
-            GROUP_SEND_DELAY = data.get("group_send_delay", 120)
+    with data_lock:
+        running = data.get("running", False)
+        otp_count = data.get("otp_count", 0)
+        services = data.get("services", default_services[:])
+        countries = data.get("countries", [c.copy() for c in default_countries])
+        FORCE_STOP = data.get("force_stop", False)
+        AUTO_DELETE_ENABLED = data.get("auto_delete_enabled", True)
+        AUTO_DELETE_DELAY = data.get("auto_delete_delay", 300)
+        CHANNEL_LINK = data.get("channel_link", CHANNEL_LINK)
+        BOT_LINK = data.get("bot_link", BOT_LINK)
+        CUSTOM_SMS_TEXT = data.get("custom_sms_text", CUSTOM_SMS_TEXT)
+        GROUP_SEND_DELAY = data.get("group_send_delay", 120)
 
-            for c in countries:
-                c.setdefault("delay", GROUP_SEND_DELAY)
-                c.setdefault("last_sent", 0)
-
-    except Exception as e:
-        logging.error(f"Load failed: {e}")
+        for c in countries:
+            c.setdefault("delay", GROUP_SEND_DELAY)
+            c.setdefault("last_sent", 0)
 
 # =========================
 # HELPERS
@@ -183,6 +185,27 @@ def send_panel_message(chat_id, text, reply_markup=None, delay=PANEL_AUTO_DELETE
     auto_delete(chat_id, msg.message_id, delay)
     return msg
 
+def get_service_display(service):
+    s = (service or "").strip().lower()
+    if s == "whatsapp":
+        return "🟢 WhatsApp"
+    if s == "telegram":
+        return "🔵 Telegram"
+    if s == "facebook":
+        return "📘 Facebook"
+    if s == "google":
+        return "🔷 Google"
+    if s == "tiktok":
+        return "🎵 TikTok"
+    if s == "apple":
+        return "🍎 Apple"
+    if s == "1xbet":
+        return "🎰 1xBet"
+    return f"📱 {service}"
+
+# =========================
+# KEYBOARDS
+# =========================
 def main_menu():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row("📊 OTP Stats", "🌍 Countries")
@@ -204,9 +227,8 @@ def delete_time_menu():
 def countries_keyboard():
     kb = InlineKeyboardMarkup()
     with data_lock:
-        current_countries = countries[:]
-
-    for i, c in enumerate(current_countries):
+        current = countries[:]
+    for i, c in enumerate(current):
         status = "✅ ON" if c["active"] else "❌ OFF"
         kb.row(
             InlineKeyboardButton(
@@ -214,7 +236,6 @@ def countries_keyboard():
                 callback_data=f"country_{i}"
             )
         )
-
     kb.row(
         InlineKeyboardButton("➕ Add Country", callback_data="add_country"),
         InlineKeyboardButton("🗑 Delete Country", callback_data="delete_country")
@@ -225,13 +246,11 @@ def countries_keyboard():
 def delete_country_keyboard():
     kb = InlineKeyboardMarkup()
     with data_lock:
-        current_countries = countries[:]
-
-    if not current_countries:
+        current = countries[:]
+    if not current:
         kb.row(InlineKeyboardButton("⬅ Back", callback_data="show_countries"))
         return kb
-
-    for i, c in enumerate(current_countries):
+    for i, c in enumerate(current):
         kb.row(
             InlineKeyboardButton(
                 f"❌ {c['flag']} {c['name']}",
@@ -244,16 +263,14 @@ def delete_country_keyboard():
 def services_keyboard():
     kb = InlineKeyboardMarkup()
     with data_lock:
-        current_countries = countries[:]
-
-    for i, c in enumerate(current_countries):
+        current = countries[:]
+    for i, c in enumerate(current):
         kb.row(
             InlineKeyboardButton(
                 f"{c['flag']} {c['name']} → {c['service']}",
                 callback_data=f"service_{i}"
             )
         )
-
     kb.row(InlineKeyboardButton("⬅ Back", callback_data="back_main"))
     return kb
 
@@ -267,29 +284,21 @@ def select_service_keyboard(country_index):
         return None
 
     for s in current_services:
-        kb.row(
-            InlineKeyboardButton(
-                s,
-                callback_data=f"setservice|{country_index}|{s}"
-            )
-        )
-
+        kb.row(InlineKeyboardButton(s, callback_data=f"setservice|{country_index}|{s}"))
     kb.row(InlineKeyboardButton("⬅ Back", callback_data="show_services"))
     return kb
 
 def country_delay_keyboard():
     kb = InlineKeyboardMarkup()
     with data_lock:
-        current_countries = countries[:]
-
-    for i, c in enumerate(current_countries):
+        current = countries[:]
+    for i, c in enumerate(current):
         kb.row(
             InlineKeyboardButton(
                 f"{c['flag']} {c['name']} ⏱ {seconds_to_text(c.get('delay', GROUP_SEND_DELAY))}",
                 callback_data=f"countrydelay_{i}"
             )
         )
-
     kb.row(InlineKeyboardButton("⬅ Back", callback_data="back_main"))
     return kb
 
@@ -306,36 +315,99 @@ def country_delay_options_keyboard(index):
     kb.row(InlineKeyboardButton("⬅ Back", callback_data="show_country_delay"))
     return kb
 
-def get_service_display(service):
-    s = (service or "").strip().lower()
+# =========================
+# IMAGE CARD DESIGN
+# =========================
+def rounded_rect(draw, xy, radius, fill, outline=None, width=1):
+    draw.rounded_rectangle(xy, radius=radius, fill=fill, outline=outline, width=width)
 
-    if s == "whatsapp":
-        return "🟢 WhatsApp"
-    elif s == "telegram":
-        return "🔵 Telegram"
-    elif s == "facebook":
-        return "📘 Facebook"
-    elif s == "google":
-        return "🔷 Google"
-    elif s == "tiktok":
-        return "🎵 TikTok"
-    elif s == "apple":
-        return "🍎 Apple"
-    elif s == "1xbet":
-        return "🎰 1xBet"
-    return f"📱 {service}"
+def draw_glow(base_img: Image.Image, box, color=(55, 126, 255), blur=18, alpha=70, radius=28):
+    glow = Image.new("RGBA", base_img.size, (0, 0, 0, 0))
+    gdraw = ImageDraw.Draw(glow)
+    rgba = (*color, alpha)
+    gdraw.rounded_rectangle(box, radius=radius, fill=rgba)
+    glow = glow.filter(ImageFilter.GaussianBlur(blur))
+    base_img.alpha_composite(glow)
 
-def generator_text(country, number, otp):
-    service_text = get_service_display(country.get("service", "Unknown"))
+def create_otp_card(country, number, otp):
+    W, H = 1280, 820
+    img = Image.new("RGBA", (W, H), (7, 12, 27, 255))
+    draw = ImageDraw.Draw(img)
 
-    return (
-        f"<b>THG</b> <b>Admin</b>\n\n"
-        f"{country['flag']} {country['code']} {service_text}\n"
-        f"<code>{number}</code>\n\n"
-        f"🔐 <code>{otp}</code>\n\n"
-        f"{CUSTOM_SMS_TEXT}"
-    )
+    # glow bg
+    draw_glow(img, (120, 90, W - 120, H - 90), color=(36, 79, 168), blur=30, alpha=55, radius=40)
 
+    # main card
+    card = (90, 70, W - 90, 520)
+    draw_glow(img, card, color=(58, 118, 255), blur=26, alpha=90, radius=34)
+
+    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    ld = ImageDraw.Draw(layer)
+    rounded_rect(ld, card, radius=34, fill=(25, 42, 88, 230), outline=(92, 149, 255, 110), width=2)
+    img.alpha_composite(layer)
+    draw = ImageDraw.Draw(img)
+
+    # fonts
+    f_title = get_font(FONT_BOLD, 64)
+    f_badge = get_font(FONT_BOLD, 38)
+    f_service = get_font(FONT_BOLD, 52)
+    f_num = get_font(FONT_REG, 54)
+    f_otp = get_font(FONT_BOLD, 62)
+    f_time = get_font(FONT_REG, 42)
+    f_btn = get_font(FONT_BOLD, 48)
+    f_msg = get_font(FONT_REG, 30)
+
+    # title
+    draw.text((140, 105), "THG Admin", font=f_title, fill=(255, 210, 129))
+
+    # admin badge
+    badge_text = "Admin"
+    badge_box = (1000, 95, 1180, 160)
+    rounded_rect(draw, badge_box, radius=28, fill=(43, 91, 52))
+    draw.text((1044, 106), badge_text, font=f_badge, fill=(163, 255, 135))
+
+    # service
+    line1 = f"{country['flag']}  {country['code']}  {get_service_display(country.get('service','Unknown'))}"
+    draw.text((140, 200), line1, font=f_service, fill=(244, 244, 244))
+
+    # number field
+    number_box = (130, 290, W - 130, 390)
+    rounded_rect(draw, number_box, radius=24, fill=(56, 94, 170, 110), outline=(130, 170, 255), width=2)
+    draw.text((170, 310), number, font=f_num, fill=(255, 255, 255))
+
+    # otp
+    draw.text((155, 430), f"🔐 {otp}", font=f_otp, fill=(255, 244, 190))
+
+    # time
+    tm = datetime.now().strftime("%H:%M")
+    draw.text((W - 250, 425), tm, font=f_time, fill=(177, 190, 214))
+
+    # footer text
+    draw.text((155, 500), CUSTOM_SMS_TEXT, font=f_msg, fill=(225, 235, 255))
+
+    # buttons
+    b1 = (105, 560, 605, 680)
+    b2 = (675, 560, 1175, 680)
+
+    draw_glow(img, b1, color=(180, 66, 66), blur=18, alpha=90, radius=28)
+    rounded_rect(draw, b1, radius=28, fill=(151, 52, 52), outline=(210, 121, 121), width=2)
+    draw.text((190, 595), "📞 Channel", font=f_btn, fill=(255, 255, 255))
+    draw.text((540, 570), "↗", font=f_btn, fill=(223, 223, 223))
+
+    draw_glow(img, b2, color=(66, 165, 78), blur=18, alpha=90, radius=28)
+    rounded_rect(draw, b2, radius=28, fill=(56, 132, 46), outline=(130, 214, 119), width=2)
+    draw.text((770, 595), "🤖 Panel", font=f_btn, fill=(255, 255, 255))
+    draw.text((1110, 570), "↗", font=f_btn, fill=(223, 223, 223))
+
+    output = io.BytesIO()
+    output.name = "otp_card.png"
+    img.convert("RGB").save(output, format="PNG")
+    output.seek(0)
+    return output
+
+# =========================
+# GROUP SENDER
+# =========================
 def auto_delete_group_message(chat_id, message_id, delay=300):
     def delete_later():
         time.sleep(delay)
@@ -345,14 +417,15 @@ def auto_delete_group_message(chat_id, message_id, delay=300):
             logging.error(f"Auto delete failed for {message_id}: {e}")
     threading.Thread(target=delete_later, daemon=True).start()
 
-def send_generator_message(text):
+def send_generator_message(country, number, otp):
     kb = InlineKeyboardMarkup()
     kb.row(
         InlineKeyboardButton("📞 Channel", url=CHANNEL_LINK),
         InlineKeyboardButton("🤖 Panel", url=BOT_LINK)
     )
 
-    sent = bot.send_message(GROUP_ID, text, reply_markup=kb)
+    image_file = create_otp_card(country, number, otp)
+    sent = bot.send_photo(GROUP_ID, image_file, reply_markup=kb)
 
     with data_lock:
         local_auto_delete = AUTO_DELETE_ENABLED
@@ -364,7 +437,7 @@ def send_generator_message(text):
     return sent
 
 # =========================
-# GENERATOR THREAD
+# GENERATOR LOOP
 # =========================
 def generator():
     global otp_count
@@ -397,7 +470,6 @@ def generator():
                 idx, c = random.choice(eligible)
                 number = mask_number(c["prefix"])
                 otp = generate_otp(c["service"])
-                text = generator_text(c, number, otp)
 
                 try:
                     with data_lock:
@@ -405,7 +477,7 @@ def generator():
                             time.sleep(1)
                             continue
 
-                    send_generator_message(text)
+                    send_generator_message(c, number, otp)
 
                     with data_lock:
                         if not FORCE_STOP and running:
@@ -458,7 +530,7 @@ def start(msg):
     )
 
 # =========================
-# MESSAGE HANDLER
+# PANEL HANDLER
 # =========================
 @bot.message_handler(func=lambda message: True)
 def panel(message):
@@ -469,7 +541,6 @@ def panel(message):
         return
 
     delete_user_message_later(message.chat.id, message.message_id, PANEL_AUTO_DELETE_DELAY)
-
     text = (message.text or "").strip()
 
     if text == "📊 OTP Stats":
@@ -497,25 +568,13 @@ def panel(message):
         )
 
     elif text == "🌍 Countries":
-        send_panel_message(
-            message.chat.id,
-            "🌍 <b>Country Manager</b>",
-            reply_markup=countries_keyboard()
-        )
+        send_panel_message(message.chat.id, "🌍 <b>Country Manager</b>", reply_markup=countries_keyboard())
 
     elif text == "🔧 Service Edit":
-        send_panel_message(
-            message.chat.id,
-            "🔧 <b>Select Country</b>",
-            reply_markup=services_keyboard()
-        )
+        send_panel_message(message.chat.id, "🔧 <b>Select Country</b>", reply_markup=services_keyboard())
 
     elif text == "⏱ Country Delay":
-        send_panel_message(
-            message.chat.id,
-            "⏱ <b>Select Country For Delay</b>",
-            reply_markup=country_delay_keyboard()
-        )
+        send_panel_message(message.chat.id, "⏱ <b>Select Country For Delay</b>", reply_markup=country_delay_keyboard())
 
     elif text == "▶ Start Generator":
         with data_lock:
@@ -535,10 +594,7 @@ def panel(message):
         with data_lock:
             AUTO_DELETE_ENABLED = True
         save_data()
-        send_panel_message(
-            message.chat.id,
-            f"🗑 <b>Auto Delete Enabled</b>\n⏱ Delay: {seconds_to_text(AUTO_DELETE_DELAY)}"
-        )
+        send_panel_message(message.chat.id, f"🗑 <b>Auto Delete Enabled</b>\n⏱ Delay: {seconds_to_text(AUTO_DELETE_DELAY)}")
 
     elif text == "🗑 Auto Delete OFF":
         with data_lock:
@@ -547,22 +603,14 @@ def panel(message):
         send_panel_message(message.chat.id, "🗑 <b>Auto Delete Disabled</b>")
 
     elif text == "⏱ Set Delete Time":
-        send_panel_message(
-            message.chat.id,
-            "⏱ <b>Select Auto Delete Time</b>",
-            reply_markup=delete_time_menu()
-        )
+        send_panel_message(message.chat.id, "⏱ <b>Select Auto Delete Time</b>", reply_markup=delete_time_menu())
 
     elif text in {"1 min", "2 min", "5 min"}:
         mins = int(text.split()[0])
         with data_lock:
             AUTO_DELETE_DELAY = mins * 60
         save_data()
-
-        send_panel_message(
-            message.chat.id,
-            f"⏱ <b>Delete Time Set:</b> {mins} minutes"
-        )
+        send_panel_message(message.chat.id, f"⏱ <b>Delete Time Set:</b> {mins} minutes")
 
     elif text == "Custom Time":
         msg = send_panel_message(
@@ -664,17 +712,14 @@ def callbacks(call):
 
         elif call.data.startswith("delcountry_"):
             i = int(call.data.split("_")[1])
-
             with data_lock:
                 if i < 0 or i >= len(countries):
                     bot.answer_callback_query(call.id, "Invalid country")
                     return
                 name = countries[i]["name"]
                 countries.pop(i)
-
             save_data()
             bot.answer_callback_query(call.id, f"{name} Deleted")
-
             try:
                 bot.edit_message_text(
                     "🗑 <b>Select country to delete</b>",
@@ -702,11 +747,9 @@ def callbacks(call):
         elif call.data.startswith("service_"):
             i = int(call.data.split("_")[1])
             kb = select_service_keyboard(i)
-
             if kb is None:
                 bot.answer_callback_query(call.id, "Invalid country")
                 return
-
             try:
                 bot.edit_message_text(
                     "🔧 <b>Select Service</b>",
@@ -724,20 +767,16 @@ def callbacks(call):
             if len(parts) != 3:
                 bot.answer_callback_query(call.id, "Invalid service data")
                 return
-
             i = int(parts[1])
             service = parts[2]
-
             with data_lock:
                 if i < 0 or i >= len(countries):
                     bot.answer_callback_query(call.id, "Invalid country")
                     return
                 countries[i]["service"] = service
                 country_name = countries[i]["name"]
-
             save_data()
             bot.answer_callback_query(call.id, f"{country_name} → {service}")
-
             try:
                 bot.edit_message_text(
                     "🔧 <b>Select Country</b>",
@@ -777,13 +816,11 @@ def callbacks(call):
 
         elif call.data.startswith("countrydelay_"):
             i = int(call.data.split("_")[1])
-
             with data_lock:
                 if i < 0 or i >= len(countries):
                     bot.answer_callback_query(call.id, "Invalid country")
                     return
                 cname = countries[i]["name"]
-
             try:
                 bot.edit_message_text(
                     f"⏱ <b>Set Delay For {cname}</b>",
@@ -801,20 +838,16 @@ def callbacks(call):
             if len(parts) != 3:
                 bot.answer_callback_query(call.id, "Invalid delay data")
                 return
-
             i = int(parts[1])
             sec = int(parts[2])
-
             with data_lock:
                 if i < 0 or i >= len(countries):
                     bot.answer_callback_query(call.id, "Invalid country")
                     return
                 countries[i]["delay"] = sec
                 cname = countries[i]["name"]
-
             save_data()
             bot.answer_callback_query(call.id, f"{cname} delay {seconds_to_text(sec)}")
-
             try:
                 bot.edit_message_text(
                     "⏱ <b>Select Country For Delay</b>",
@@ -828,13 +861,11 @@ def callbacks(call):
 
         elif call.data.startswith("customcdelay_"):
             i = int(call.data.split("_")[1])
-
             with data_lock:
                 if i < 0 or i >= len(countries):
                     bot.answer_callback_query(call.id, "Invalid country")
                     return
                 cname = countries[i]["name"]
-
             pending_country_delay_index[call.message.chat.id] = i
             msg = send_panel_message(
                 call.message.chat.id,
@@ -865,14 +896,11 @@ def callbacks(call):
 def add_country_process(message):
     if not is_admin(message.from_user.id):
         return
-
     delete_user_message_later(message.chat.id, message.message_id, PANEL_AUTO_DELETE_DELAY)
 
     text = (message.text or "").strip()
-
     try:
         data = text.split()
-
         if len(data) != 5:
             raise ValueError("Need exactly 5 parts")
 
@@ -884,7 +912,6 @@ def add_country_process(message):
 
         if not code.startswith("#"):
             raise ValueError("Country code must start with #")
-
         if not prefix.startswith("+"):
             raise ValueError("Prefix must start with +")
 
@@ -901,10 +928,7 @@ def add_country_process(message):
             })
 
         save_data()
-        send_panel_message(
-            message.chat.id,
-            f"✅ <b>Country Added</b>\n\n{flag} {name} {code} {prefix} {service}"
-        )
+        send_panel_message(message.chat.id, f"✅ <b>Country Added</b>\n\n{flag} {name} {code} {prefix} {service}")
 
     except Exception:
         send_panel_message(
@@ -914,132 +938,92 @@ def add_country_process(message):
 
 def set_custom_time(message):
     global AUTO_DELETE_DELAY
-
     if not is_admin(message.from_user.id):
         return
-
     delete_user_message_later(message.chat.id, message.message_id, PANEL_AUTO_DELETE_DELAY)
 
     try:
         sec = int((message.text or "").strip())
-
         if sec < 1:
             send_panel_message(message.chat.id, "❌ Minimum 1 sec")
             return
-
         with data_lock:
             AUTO_DELETE_DELAY = sec
         save_data()
-
-        send_panel_message(
-            message.chat.id,
-            f"⏱ <b>Auto Delete Time Set:</b> {sec} sec"
-        )
-
+        send_panel_message(message.chat.id, f"⏱ <b>Auto Delete Time Set:</b> {sec} sec")
     except Exception:
         send_panel_message(message.chat.id, "❌ Invalid number")
 
 def update_channel_link_process(message):
     global CHANNEL_LINK
-
     if not is_admin(message.from_user.id):
         return
-
     delete_user_message_later(message.chat.id, message.message_id, PANEL_AUTO_DELETE_DELAY)
 
     text = (message.text or "").strip()
-
     if not text.startswith("https://t.me/"):
         send_panel_message(message.chat.id, "❌ Invalid channel link")
         return
-
     CHANNEL_LINK = text
     save_data()
-
-    send_panel_message(
-        message.chat.id,
-        f"✅ <b>Channel Link Updated</b>\n\n{CHANNEL_LINK}"
-    )
+    send_panel_message(message.chat.id, f"✅ <b>Channel Link Updated</b>\n\n{CHANNEL_LINK}")
 
 def update_bot_link_process(message):
     global BOT_LINK
-
     if not is_admin(message.from_user.id):
         return
-
     delete_user_message_later(message.chat.id, message.message_id, PANEL_AUTO_DELETE_DELAY)
 
     text = (message.text or "").strip()
-
     if not text.startswith("https://t.me/"):
         send_panel_message(message.chat.id, "❌ Invalid bot link")
         return
-
     BOT_LINK = text
     save_data()
-
-    send_panel_message(
-        message.chat.id,
-        f"✅ <b>Bot Link Updated</b>\n\n{BOT_LINK}"
-    )
+    send_panel_message(message.chat.id, f"✅ <b>Bot Link Updated</b>\n\n{BOT_LINK}")
 
 def update_sms_text_process(message):
     global CUSTOM_SMS_TEXT
-
     if not is_admin(message.from_user.id):
         return
-
     delete_user_message_later(message.chat.id, message.message_id, PANEL_AUTO_DELETE_DELAY)
 
     text = (message.text or "").strip()
-
     if not text:
         send_panel_message(message.chat.id, "❌ SMS text empty হতে পারবে না")
         return
-
     CUSTOM_SMS_TEXT = text
     save_data()
-
-    send_panel_message(
-        message.chat.id,
-        f"✅ <b>SMS Text Updated</b>\n\n<code>{CUSTOM_SMS_TEXT}</code>"
-    )
+    send_panel_message(message.chat.id, f"✅ <b>SMS Text Updated</b>\n\n<code>{CUSTOM_SMS_TEXT}</code>")
 
 def update_group_send_time_process(message):
     global GROUP_SEND_DELAY
-
     if not is_admin(message.from_user.id):
         return
-
     delete_user_message_later(message.chat.id, message.message_id, PANEL_AUTO_DELETE_DELAY)
 
     try:
         sec = int((message.text or "").strip())
-
         if sec < 1:
             send_panel_message(message.chat.id, "❌ Minimum 1 sec")
             return
 
         GROUP_SEND_DELAY = sec
-
         with data_lock:
             for i in range(len(countries)):
                 countries[i]["delay"] = sec
 
         save_data()
-
         send_panel_message(
             message.chat.id,
             f"✅ <b>Default Group Send Time Updated:</b> {GROUP_SEND_DELAY} sec\nসব দেশের delay update হয়েছে।"
         )
-
     except Exception:
         send_panel_message(message.chat.id, "❌ Invalid number")
 
 def set_custom_country_delay(message):
     if not is_admin(message.from_user.id):
         return
-
     delete_user_message_later(message.chat.id, message.message_id, PANEL_AUTO_DELETE_DELAY)
 
     chat_id = message.chat.id
@@ -1049,13 +1033,11 @@ def set_custom_country_delay(message):
 
     try:
         sec = int((message.text or "").strip())
-
         if sec < 1:
             send_panel_message(chat_id, "❌ Minimum 1 sec")
             return
 
         idx = pending_country_delay_index[chat_id]
-
         with data_lock:
             if idx < 0 or idx >= len(countries):
                 send_panel_message(chat_id, "❌ Invalid country")
@@ -1065,11 +1047,7 @@ def set_custom_country_delay(message):
 
         save_data()
         pending_country_delay_index.pop(chat_id, None)
-
-        send_panel_message(
-            chat_id,
-            f"⏱ <b>{cname} Delay Set:</b> {sec} sec"
-        )
+        send_panel_message(chat_id, f"⏱ <b>{cname} Delay Set:</b> {sec} sec")
 
     except Exception:
         send_panel_message(chat_id, "❌ Invalid number")
@@ -1079,13 +1057,12 @@ def set_custom_country_delay(message):
 # =========================
 if __name__ == "__main__":
     if TOKEN == "PASTE_NEW_BOT_TOKEN_HERE":
-        raise ValueError("Please set BOT_TOKEN in Railway Variables or replace TOKEN in code.")
+        raise ValueError("Please set BOT_TOKEN first.")
 
     load_data()
     threading.Thread(target=generator, daemon=True).start()
 
     print("BOT RUNNING...")
-
     while True:
         try:
             bot.infinity_polling(timeout=60, long_polling_timeout=30)
