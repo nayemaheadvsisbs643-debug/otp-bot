@@ -24,7 +24,7 @@ BOT_LINK = os.getenv("BOT_LINK", "https://t.me/numberfast12_bot")
 
 DATA_FILE = "otp_bot_data.json"
 
-# panel messages + user button-text auto delete delay
+# panel messages + user text auto delete
 PANEL_AUTO_DELETE_DELAY = 60  # 1 minute
 
 bot = telebot.TeleBot(TOKEN, parse_mode="HTML")
@@ -67,7 +67,7 @@ countries = [c.copy() for c in default_countries]
 
 FORCE_STOP = False
 AUTO_DELETE_ENABLED = True
-AUTO_DELETE_DELAY = 300  # group OTP auto delete delay
+AUTO_DELETE_DELAY = 300  # group OTP auto delete
 
 CUSTOM_SMS_TEXT = "তোর টেলিগ্রাম কোড এসেছে গুরুপ চেক কর"
 GROUP_SEND_DELAY = 120  # default delay for all/new countries
@@ -167,7 +167,6 @@ def auto_delete(chat_id, message_id, delay=60):
             bot.delete_message(chat_id, message_id)
         except Exception:
             pass
-
     threading.Thread(target=delete_later, daemon=True).start()
 
 def delete_user_message_later(chat_id, message_id, delay=60):
@@ -177,7 +176,6 @@ def delete_user_message_later(chat_id, message_id, delay=60):
             bot.delete_message(chat_id, message_id)
         except Exception:
             pass
-
     threading.Thread(target=delete_later, daemon=True).start()
 
 def send_panel_message(chat_id, text, reply_markup=None, delay=PANEL_AUTO_DELETE_DELAY):
@@ -308,12 +306,34 @@ def country_delay_options_keyboard(index):
     kb.row(InlineKeyboardButton("⬅ Back", callback_data="show_country_delay"))
     return kb
 
+def get_service_display(service):
+    s = (service or "").strip().lower()
+
+    if s == "whatsapp":
+        return "🟢 WhatsApp"
+    elif s == "telegram":
+        return "🔵 Telegram"
+    elif s == "facebook":
+        return "📘 Facebook"
+    elif s == "google":
+        return "🔷 Google"
+    elif s == "tiktok":
+        return "🎵 TikTok"
+    elif s == "apple":
+        return "🍎 Apple"
+    elif s == "1xbet":
+        return "🎰 1xBet"
+    return f"📱 {service}"
+
 def generator_text(country, number, otp):
+    service_text = get_service_display(country.get("service", "Unknown"))
+
     return (
-        f"{CUSTOM_SMS_TEXT}\n\n"
-        f"{country['flag']} <b>{country['name']}</b> {country['code']} 📱 <b>{country['service']}</b>\n\n"
+        f"<b>THG</b> <b>Admin</b>\n\n"
+        f"{country['flag']} {country['code']} {service_text}\n"
         f"<code>{number}</code>\n\n"
-        f"🔑 <b>{otp}</b>"
+        f"🔐 <code>{otp}</code>\n\n"
+        f"{CUSTOM_SMS_TEXT}"
     )
 
 def auto_delete_group_message(chat_id, message_id, delay=300):
@@ -323,14 +343,13 @@ def auto_delete_group_message(chat_id, message_id, delay=300):
             bot.delete_message(chat_id, message_id)
         except Exception as e:
             logging.error(f"Auto delete failed for {message_id}: {e}")
-
     threading.Thread(target=delete_later, daemon=True).start()
 
 def send_generator_message(text):
     kb = InlineKeyboardMarkup()
     kb.row(
-        InlineKeyboardButton("📢 Main Channel", url=CHANNEL_LINK),
-        InlineKeyboardButton("🤖 Number Bot", url=BOT_LINK)
+        InlineKeyboardButton("📞 Channel", url=CHANNEL_LINK),
+        InlineKeyboardButton("🤖 Panel", url=BOT_LINK)
     )
 
     sent = bot.send_message(GROUP_ID, text, reply_markup=kb)
@@ -413,7 +432,6 @@ def start(msg):
     if not is_admin(msg.from_user.id):
         return
 
-    # delete user's /start after 1 minute
     delete_user_message_later(msg.chat.id, msg.message_id, PANEL_AUTO_DELETE_DELAY)
 
     with data_lock:
@@ -450,7 +468,6 @@ def panel(message):
     if not is_admin(message.from_user.id):
         return
 
-    # delete user's button-text / typed message after 1 minute
     delete_user_message_later(message.chat.id, message.message_id, PANEL_AUTO_DELETE_DELAY)
 
     text = (message.text or "").strip()
